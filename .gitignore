@@ -38,6 +38,8 @@ override.tf.json
 terraform.rc
 # endregion
 
+.terraform.lock.hcl
+
 # region Python
 
 # Byte-compiled / optimized / DLL files
