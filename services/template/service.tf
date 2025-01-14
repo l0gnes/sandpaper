@@ -1,3 +1,5 @@
+
+# region variables
 variable "gcp-location" {
     type = string
 }
@@ -13,7 +15,9 @@ variable "gcp-project-id" {
 variable "service-name" {
   type = string
 }
+# endregion
 
+#region modules
 # should import from terraform.tfvars in the root directory
 module "cloud_run_svc" {
   source = "../../terraform/modules/cloud_run_svc"
@@ -34,3 +38,26 @@ module "iam_noauth" {
 
   depends_on = [ module.cloud_run_svc ]
 }
+# endregion
+
+# region system
+terraform {
+  required_providers {
+    google = {
+      source = "hashicorp/google"
+      version = "6.15.0"
+    }
+  }
+
+  backend "gcs" {
+    bucket  = "tf-state-sandpaper"
+    prefix  = "terraform/state"
+  }
+}
+
+provider "google" {
+  project = var.gcp-project-id
+  region  = var.gcp-location
+  zone    = var.gcp-zone
+}
+# endregion
