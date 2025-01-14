@@ -220,4 +220,7 @@ cython_debug/
 
 .vscode/
 
+services/*/shared/
+swagger2.json
+
 # endregion

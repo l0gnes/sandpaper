@@ -1,0 +1,277 @@
+name: Voithos Test & Deploy
+
+on:
+  push:
+    branches: [master, dev]
+    paths:
+      - 'microservices/**'
+
+jobs:
+
+  find-changes:
+    outputs:
+      changed_directories: ${{ steps.set-output.outputs.changed_directories }}  # The `dirs` doesn't exist in the outputs of changed-files@v35 action.
+    name: Find Changes
+    runs-on: ubuntu-latest
+    if: ${{ github.actor != 'github-actions[bot]' && github.event_name != 'push' || github.event.pusher.name != 'github-actions[bot]' }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Get changed files
+      id: changed-files
+      uses: tj-actions/changed-files@v44
+      with:
+        dir_names: true
+        dir_names_max_depth: 2  # This is optional. If not provided, full subdirectories' paths will be provided. Use it if you need to trim the output. See docs for details: https://github.com/tj-actions/changed-files/tree/main#inputs.
+        json: true
+        quotepath: false
+        files: |
+          microservices/
+
+    - name: 'Set output in the matrix format'
+      id: set-output
+      run: echo "changed_directories={\"dir\":${{ steps.changed-files.outputs.all_changed_files }}}" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test altered microservices & Update OpenAPI Specs
+    runs-on: ubuntu-latest
+    if: ${{ needs.find-changes.outputs.changed_directories != '' }}  # Without it, the strategy parser will fail if the changed_directories is empty.
+    strategy:
+      matrix: ${{fromJson(needs.find-changes.outputs.changed_directories)}}
+      max-parallel: 3
+    needs:
+      - find-changes
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    permissions:
+      contents: write
+    steps:
+
+    - name: Checkout code
+      uses: actions/checkout@v2
+      with:
+        token: ${{ secrets.MONOREPO_PAT }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: "3.12" # Match the Python version to what you use in Docker
+
+    - name: Update requirements.txt
+      env:
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      run : |
+        sed -i -e 's/${GH_TOKEN}/${{ env.GH_TOKEN }}/g' requirements.txt
+
+    - name: The magic cert.json retrieval step
+      env:
+        CERT_B64: ${{ secrets.CERT_B64 }}
+      run : |
+        echo ${{ env.CERT_B64 }} | base64 --decode >> cert.json
+
+    - name: Install dependencies
+      run: |
+        pip install --no-cache-dir -r requirements.txt
+
+    - name: Run tests
+      env:
+        MONGODB_URI: ${{ secrets.MONGODB_URI }}
+        MONGODB_NAME: ${{ secrets.MONGODB_NAME }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY}}
+        GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        VOITHOS_REDIS_HOSTNAME: ${{ secrets.VOITHOS_REDIS_HOSTNAME }}
+        VOITHOS_REDIS_PORT: ${{ secrets.VOITHOS_REDIS_PORT }}
+        VOITHOS_REDIS_PASSWORD: ${{ secrets.VOITHOS_REDIS_PASSWORD }}
+        FIREBASE_WEB_API_KEY: ${{ secrets.FIREBASE_WEB_API_KEY }}
+        FIREBASE_AUTH_PROJECT_ID: ${{ secrets.FIREBASE_AUTH_PROJECT_ID }}
+        DEBUG: true
+      run: if [ -d ./tests ]; then pytest; fi
+
+  deploy:
+    name: Deploy microservices
+    runs-on: ubuntu-latest
+    if: ${{ needs.find-changes.outputs.changed_directories != '' }}  # Without it, the strategy parser will fail if the changed_directories is empty.
+    strategy:
+      matrix: ${{fromJson(needs.find-changes.outputs.changed_directories)}}
+    needs:
+      - find-changes
+      - test
+
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Magic cert.json step
+        env:
+            CERT_B64: ${{ secrets.CERT_B64 }}
+        run: |
+          {
+            echo 'CERT_CONTENTS<<EOF'
+            echo ${{ env.CERT_B64 }} | base64 --decode
+            echo EOF
+          } >> "$GITHUB_ENV"
+
+      - id: auth
+        name: Authenticate with Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.CERT_CONTENTS }}
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@v1
+        with:
+          registry: us-central1-docker.pkg.dev
+          username: _json_key
+          password: ${{ env.CERT_CONTENTS }}
+
+      - name: Get tag
+        id: get-tag
+        run: echo ::set-output name=short_ref::${GITHUB_REF#refs/*/}
+
+      - id: docker-push-tagged
+        name: Tag Docker image and push to Google Artifact Registry
+        uses: docker/build-push-action@v2
+        with:
+          push: true
+          context: ${{ matrix.dir }}
+          build-args: |
+            GH_TOKEN=${{ secrets.GH_TOKEN }}
+            CERT_B64=${{ secrets.CERT_B64 }}
+          tags: |
+             us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/voithos/${{ matrix.dir }}:${{ github.sha }}
+             us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/voithos/${{ matrix.dir }}:latest
+          secrets:
+            MONGODB_URI=${{ secrets.MONGODB_URI }}
+            MONGODB_NAME=${{ secrets.MONGODB_NAME }}
+            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+            COHERE_API_KEY=${{ secrets.COHERE_API_KEY }}
+            GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY}}
+            VOITHOS_REDIS_HOSTNAME=${{ secrets.VOITHOS_REDIS_HOSTNAME }}
+            VOITHOS_REDIS_PORT=${{ secrets.VOITHOS_REDIS_PORT }}
+            VOITHOS_REDIS_PASSWORD=${{ secrets.VOITHOS_REDIS_PASSWORD }}
+            FIREBASE_WEB_API_KEY=${{ secrets.FIREBASE_WEB_API_KEY }}
+            FIREBASE_AUTH_PROJECT_ID${{ secrets.FIREBASE_AUTH_PROJECT_ID }}
+
+      # This step gives us access to kubectl & authenticates to our GKE instance
+      - id: 'get-credentials'
+        uses: 'google-github-actions/get-gke-credentials@v2'
+        with:
+          cluster_name: 'voithos'
+          location: 'us-central1-a'
+
+      - name: Extract branch name
+        shell: bash
+        run: echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
+        id: extract_branch
+
+      - id: deploy
+        name: Deploy to GKE
+        run: |
+          IMAGE_URL="us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/voithos/${{ matrix.dir }}:${{ github.sha }}"
+          find "${{ matrix.dir }}/k8s" -type f -exec sh -c 'sed -i "s|\$IMAGE_TAG|${IMAGE_URL}|g" "$1"' _ {} \;
+          find "${{ matrix.dir }}/k8s" -type f -exec sh -c 'sed -i "s|\$K8S_NAMESPACE|${K8S_NAMESPACE}|g" "$1"' _ {} \;
+          find "${{ matrix.dir }}/k8s" -type f -exec sh -c 'sed -i "s|\$K8S_CONFIGMAP|${K8S_CONFIGMAP}|g" "$1"' _ {} \;
+          find "${{ matrix.dir }}/k8s" -type f -exec sh -c 'sed -i "s|\$K8S_DOMAIN|${K8S_DOMAIN}|g" "$1"' _ {} \;
+          kubectl apply -f ${{ matrix.dir }}/k8s
+        env:
+          IMAGE_URL: ${{ secrets.GCP_PROJECT_ID }}/voithos/${{ matrix.dir }}:${{ github.sha }}
+          K8S_NAMESPACE: "${{ steps.extract_branch.outputs.branch == 'master' && 'default' || 'development' }}"
+          K8S_DOMAIN: "${{ steps.extract_branch.outputs.branch == 'master' && 'api.notes.voithos.app' || 'canaryapi.notes.voithos.app' }}"
+          K8S_CONFIGMAP: "${{ steps.extract_branch.outputs.branch == 'master' && 'production-config' || 'development-config' }}"
+
+
+  update_api_spec:
+    name: Push updated API Spec
+    runs-on: ubuntu-latest
+    needs:
+      - deploy
+
+    steps:
+      - id: checkout
+        name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MONOREPO_PAT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.12" # Match the Python version to what you use in Docker
+
+      - id: install-tool
+        name: Install Api Gateway tool
+        working-directory: ${{ github.workspace }}  # This ensures the step runs in the root directory
+        run: |
+          python -m pip install ./tools/voithos_apigateway_tool
+
+      - id: export
+        name: Export OpenAPI 3.0 Spec to microservice
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_NAME: ${{ secrets.MONGODB_NAME }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY}}
+          VOITHOS_REDIS_HOSTNAME: ${{ secrets.VOITHOS_REDIS_HOSTNAME }}
+          VOITHOS_REDIS_PORT: ${{ secrets.VOITHOS_REDIS_PORT }}
+          VOITHOS_REDIS_PASSWORD: ${{ secrets.VOITHOS_REDIS_PASSWORD }}
+          FIREBASE_WEB_API_KEY: ${{ secrets.FIREBASE_WEB_API_KEY }}
+          FIREBASE_AUTH_PROJECT_ID: ${{ secrets.FIREBASE_AUTH_PROJECT_ID }}
+          DEBUG: true
+        run: |
+          sed -i -e 's/${GH_TOKEN}/${{ secrets.GH_TOKEN }}/g' ./microservices/*/requirements.txt
+          find ./microservices/* -maxdepth 0 -type d \
+            -exec sh -c 'echo ${{ secrets.CERT_B64 }} | base64 --decode >> $0/cert.json' {} ';'
+          python -m pip install -U \
+            $(find ./microservices/*/requirements.txt -maxdepth 0 -type f -exec echo '-r' {} ';' | xargs)
+          find ./microservices/* -maxdepth 0 -type d \
+            -exec sh -c 'if [ -d "$0/app" ]; then cd "$0" && python -m voithos_apigateway_tool openapi export app.main:app -D ./openapi.json; fi' {} ';'
+
+      - id: merge
+        name: Merge OpenAPI specs (3.0)
+        run: |
+          python -m voithos_apigateway_tool openapi merge $(find ./microservices/*/openapi.json -maxdepth 0 | xargs) -D ./openapi_3-spec.json
+
+      - id: push-changes
+        name: Commit OpenAPI 3.0 spec
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update OpenAPI docs"
+          push_options: "--force"
+          file_pattern: "**/openapi.json ./openapi_3-spec.json"
+
+      - name: Magic cert.json step
+        env:
+          CERT_B64: ${{ secrets.CERT_B64 }}
+        run: |
+          {
+            echo 'CERT_CONTENTS<<EOF'
+            echo ${{ env.CERT_B64 }} | base64 --decode
+            echo EOF
+          } >> "$GITHUB_ENV"
+
+      - id: auth
+        name: Authenticate with Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ env.CERT_CONTENTS }}
+
+      - id: upload-file
+        uses: google-github-actions/upload-cloud-storage@v2
+        with:
+          path: 'openapi_3-spec.json'
+          destination: 'voithos_docs_bucket'
+          predefinedAcl: 'publicRead'

@@ -1,0 +1,16 @@
+# config.toml contains stuff for CI/CD so that we know what script to run to get a file.
+# we can also put other stuff in here in the future if we want idc
+
+# information about the service
+[service]
+name = "template"
+lang = "python"
+
+# which cicd tool to use
+[cicd]
+tool = "python"
+
+# define python-tool-specific stuff
+[cicd.python]
+main_module = "src.app" # (src.app):app
+app_name = "app" # src.app:(app)
