@@ -1,18 +1,18 @@
 
 # region variables
-variable "gcp-location" {
+variable "gcp_location" {
     type = string
 }
 
-variable "gcp-zone" {
+variable "gcp_zone" {
     type = string
 }
 
-variable "gcp-project-id" {
+variable "gcp_project_id" {
     type = string
 }
 
-variable "service-name" {
+variable "service_name" {
   type = string
 }
 # endregion
@@ -22,19 +22,19 @@ variable "service-name" {
 module "cloud_run_svc" {
   source = "../../terraform/modules/cloud_run_svc"
 
-  service-name = var.service-name
-  gcp-location = var.gcp-location
-  gcp-zone = var.gcp-zone
-  gcp-project-id = var.gcp-project-id
+  service_name = var.service_name
+  gcp_location = var.gcp_location
+  gcp_zone = var.gcp_zone
+  gcp_project_id = var.gcp_project_id
 }
 
 module "iam_noauth" {
   source = "../../terraform/modules/iam_noauth"
 
-  service-name = var.service-name
-  gcp-location = var.gcp-location
-  gcp-zone = var.gcp-zone
-  gcp-project-id = var.gcp-project-id
+  service_name = var.service_name
+  gcp_location = var.gcp_location
+  gcp_zone = var.gcp_zone
+  gcp_project_id = var.gcp_project_id
 
   depends_on = [ module.cloud_run_svc ]
 }
@@ -56,8 +56,8 @@ terraform {
 }
 
 provider "google" {
-  project = var.gcp-project-id
-  region  = var.gcp-location
-  zone    = var.gcp-zone
+  project = var.gcp_project_id
+  region  = var.gcp_location
+  zone    = var.gcp_zone
 }
 # endregion

@@ -1,11 +1,15 @@
-variable "gcp-location" {}
-
-variable "gcp-zone" {}
-
-variable "gcp-project-id" {
+variable "gcp_location" {
     type = string
 }
 
-variable "service-name" {
+variable "gcp_zone" {
+    type = string
+}
+
+variable "gcp_project_id" {
+    type = string
+}
+
+variable "service_name" {
   type = string
 }

@@ -8,9 +8,9 @@ data "google_iam_policy" "noauth" {
 }
 
 resource "google_cloud_run_service_iam_policy" "noauth" {
-  location    = var.gcp-location
-  project     = var.gcp-project-id
-  service     = var.service-name
+  location    = var.gcp_location
+  project     = var.gcp_project_id
+  service     = var.service_name
 
   policy_data = data.google_iam_policy.noauth.policy_data
 }
